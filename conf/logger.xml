@@ -9,8 +9,9 @@
     </encoder>
 
     <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-      <fileNamePattern>application.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <fileNamePattern>${application.home}/logs/application.%d{yyyy-MM-dd}.log</fileNamePattern>
       <maxHistory>5</maxHistory>
+      <totalSizeCap>5GB</totalSizeCap>
     </rollingPolicy>
   </appender>
 
@@ -22,6 +23,7 @@
   <logger name="com.avaje.ebeaninternal.server.core.XmlConfigLoader" level="OFF" />
   <logger name="com.avaje.ebeaninternal.server.lib.BackgroundThread" level="OFF" />
   <logger name="com.gargoylesoftware.htmlunit.javascript" level="OFF" />
+  <logger name="org.apache.zookeeper" level="INFO"/>
 
   <logger name="akka" level="INFO" />
   <logger name="kafka" level="INFO" />

@@ -7,68 +7,68 @@ package kafka.manager.utils
 import java.util.Properties
 
 import LogkafkaErrors._
-import kafka.manager.ActorModel.{LogkafkaIdentity}
+import kafka.manager.BaseTest
+import kafka.manager.model.ActorModel
+import ActorModel.{LogkafkaIdentity}
 import kafka.manager.features.ClusterFeatures
-import kafka.manager.{ClusterContext, ClusterConfig, Kafka_0_8_2_0}
+import kafka.manager.model.{ClusterContext, ClusterConfig, Kafka_0_8_2_0}
 import org.apache.zookeeper.data.Stat
 import scala.concurrent.Future
 /**
  * @author zheolong
  */
-class TestCreateLogkafka extends CuratorAwareTest {
+class TestCreateLogkafka extends CuratorAwareTest with BaseTest {
 
   import logkafka82.LogkafkaConfigErrors._ 
   
   private[this] val adminUtils  = new LogkafkaAdminUtils(Kafka_0_8_2_0)
-  private[this] val defaultClusterConfig = ClusterConfig("test","0.8.2.0","localhost:2818",100,false,true)
+  private[this] val defaultClusterConfig = ClusterConfig("test","0.8.2.0","localhost:2818",100,false, pollConsumers = true, filterConsumers = true, jmxUser = None, jmxPass = None, jmxSsl = false, tuning = Option(defaultTuning), securityProtocol="PLAINTEXT")
   private[this] val defaultClusterContext = ClusterContext(ClusterFeatures.from(defaultClusterConfig), defaultClusterConfig)
-  private[this] val createLogkafkaHostname = "km-unit-test-logkafka-hostname"
+  private[this] val createLogkafkaLogkafkaId = "km-unit-test-logkafka-logkafka_id"
   private[this] val createLogkafkaLogPath = "/km-unit-test-logkafka-logpath"
   private[this] val createLogkafkaTopic = "km-unit-test-logkafka-topic"
   private[this] val createLogkafkaRegexFilterPattern = "km-unit-test-logkafka-regex-filter-pattern"
-  private[this] val createLogkafkaInvalidHostnames = List("x.x..x.x", ".x.x.x.x", "x.x.x.x.")
+  private[this] val createLogkafkaInvalidLogkafkaIds = List(".", "..")
+  private[this] val createLogkafkaInvalidLineDelimiters = List("-1", "256")
 
-  test("create logkafka with empty hostname") {
+  test("create logkafka with empty logkafka id") {
     val config = new Properties()
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
-    checkError[HostnameEmpty] {
+    checkError[LogkafkaIdEmpty] {
       withCurator { curator =>
         adminUtils.createLogkafka(curator, "", createLogkafkaLogPath, config)
       }
     }
   }
 
-  test("create logkafka with invalid hostname") {
+  test("create logkafka with invalid logkafka id") {
     val config = new Properties()
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
     withCurator { curator =>
-      checkError[HostnameIsLocalhost] {
-        adminUtils.createLogkafka(curator, "localhost", createLogkafkaLogPath, config)
-      }
-      createLogkafkaInvalidHostnames foreach { invalidHostname =>
-        checkError[InvalidHostname] {
-          adminUtils.createLogkafka(curator, invalidHostname, createLogkafkaLogPath, config)
+      createLogkafkaInvalidLogkafkaIds foreach { invalidLogkafkaId =>
+        checkError[InvalidLogkafkaId] {
+          adminUtils.createLogkafka(curator, invalidLogkafkaId, createLogkafkaLogPath, config)
         }
       }
     }
   }
 
-  test("create logkafka with hostname too long") {
+  test("create logkafka with logkafka id too long") {
     val config = new Properties()
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
-    checkError[InvalidHostnameLength] {
+    checkError[InvalidLogkafkaIdLength] {
       withCurator { curator =>
         adminUtils.createLogkafka(curator, "adfasfdsafsfasdfsadfasfsdfasffsdfsadfsdfsdfsfasdfdsfdsafasdfsfdsafasdfdsfdsafsdfdsafasdfsdafasdfadsfdsfsdafsdfsadfdsfasfdfasfsdafsdfdsfdsfasdfdsfsdfsadfsdfasdfdsafasdfsadfdfdsfdsfsfsfdsfdsfdssafsdfdsafadfasdfsdafsdfasdffasfdfadsfasdfasfadfafsdfasfdssafffffffffffdsadfsafdasdfsafsfsfsdfafs", createLogkafkaLogPath, config)
       }
     }
   }
 
-  test("create logkafka with bad chars in hostname") {
+  test("create logkafka with bad chars in logkafka id") {
     val config = new Properties()
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
-    checkError[IllegalCharacterInName] {
+    checkError[IllegalCharacterInLogkafkaId] {
       withCurator { curator =>
-        adminUtils.createLogkafka(curator, "bad!Hostname!", createLogkafkaLogPath, config)
+        adminUtils.createLogkafka(curator, "bad!LogkafkaId!", createLogkafkaLogPath, config)
       }
     }
   }
@@ -78,7 +78,7 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
     checkError[LogPathEmpty] {
       withCurator { curator =>
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, "", config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, "", config)
       }
     }
   }
@@ -88,7 +88,7 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
     withCurator { curator =>
       checkError[LogPathNotAbsolute] {
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, "a/b/c", config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, "a/b/c", config)
       }
     }
   }
@@ -98,7 +98,7 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
     checkError[InvalidLogPathLength] {
       withCurator { curator =>
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, "/adfasfdsafsfasdfsadfasfsdfasffsdfsadfsdfsdfsfasdfdsfdsafasdfsfdsafasdfdsfdsafsdfdsafasdfsdafasdfadsfdsfsdafsdfsadfdsfasfdfasfsdafsdfdsfdsfasdfdsfsdfsadfsdfasdfdsafasdfsadfdfdsfdsfsfsfdsfdsfdssafsdfdsafadfasdfsdafsdfasdffasfdfadsfasdfasfadfafsdfasfdssafffffffffffdsadfsafdasdfsafsfsfsdfafs", config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, "/adfasfdsafsfasdfsadfasfsdfasffsdfsadfsdfsdfsfasdfdsfdsafasdfsfdsafasdfdsfdsafsdfdsafasdfsdafasdfadsfdsfsdafsdfsadfdsfasfdfasfsdafsdfdsfdsfasdfdsfsdfsadfsdfasdfdsafasdfsadfdfdsfdsfsfsfdsfdsfdssafsdfdsafadfasdfsdafsdfasdffasfdfadsfasdfasfadfafsdfasfdssafffffffffffdsadfsafdasdfsafsfsfsdfafs", config)
       }
     }
   }
@@ -108,7 +108,7 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
     checkError[IllegalCharacterInPath] {
       withCurator { curator =>
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, "/bad?Log Path*", config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, "/bad?Log Path*", config)
       }
     }
   }
@@ -119,7 +119,7 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.RegexFilterPatternProp, "{")
     withCurator { curator =>
       checkError[InvalidRegexFilterPattern] {
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, createLogkafkaLogPath, config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, createLogkafkaLogPath, config)
       }
     }
   }
@@ -130,7 +130,20 @@ class TestCreateLogkafka extends CuratorAwareTest {
     config.put(kafka.manager.utils.logkafka82.LogConfig.RegexFilterPatternProp, "adfasfdsafsfasdfsadfasfsdfasffsdfsadfsdfsdfsfasdfdsfdsafasdfsfdsafasdfdsfdsafsdfdsafasdfsdafasdfadsfdsfsdafsdfsadfdsfasfdfasfsdafsdfdsfdsfasdfdsfsdfsadfsdfasdfdsafasdfsadfdfdsfdsfsfsfdsfdsfdssafsdfdsafadfasdfsdafsdfasdffasfdfadsfasdfasfadfafsdfasfdssafffffffffffdsadfsafdasdfsafsfsfsdfafs")
     checkError[InvalidRegexFilterPatternLength] {
       withCurator { curator =>
-        adminUtils.createLogkafka(curator, createLogkafkaHostname, createLogkafkaLogPath, config)
+        adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, createLogkafkaLogPath, config)
+      }
+    }
+  }
+
+  test("create logkafka with invalid line delimiter") {
+    val config = new Properties()
+    config.put(kafka.manager.utils.logkafka82.LogConfig.TopicProp, createLogkafkaTopic)
+    withCurator { curator =>
+      createLogkafkaInvalidLineDelimiters foreach { invalidLineDelimiter =>
+        config.put(kafka.manager.utils.logkafka82.LogConfig.LineDelimiterProp, invalidLineDelimiter)
+        checkError[InvalidLineDelimiter] {
+          adminUtils.createLogkafka(curator, createLogkafkaLogkafkaId, createLogkafkaLogPath, config)
+        }
       }
     }
   }

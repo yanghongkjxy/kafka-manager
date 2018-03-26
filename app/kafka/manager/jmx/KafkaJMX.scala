@@ -3,45 +3,58 @@
  * See accompanying LICENSE file.
  */
 
-package kafka.manager
+package kafka.manager.jmx
 
 import java.io.File
 import java.{util => ju}
-
 import javax.management._
-import javax.management.remote.{JMXConnectorFactory, JMXServiceURL}
+import javax.management.remote.rmi.RMIConnectorServer
+import javax.management.remote.{JMXConnectorFactory, JMXServiceURL, JMXConnector}
+import javax.naming.Context
+import javax.rmi.ssl.SslRMIClientSocketFactory
+
+import com.yammer.metrics.reporting.JmxReporter.GaugeMBean
+import grizzled.slf4j.Logging
+import kafka.manager.model.{Kafka_0_8_1_1, KafkaVersion, ActorModel}
+import ActorModel.BrokerMetrics
 
 import scala.collection.JavaConverters._
 import scala.util.matching.Regex
-
-import com.yammer.metrics.reporting.JmxReporter.GaugeMBean
-import kafka.manager.ActorModel.BrokerMetrics
-import org.slf4j.LoggerFactory
-
 import scala.util.{Failure, Try}
-import scala.math
 
-object KafkaJMX {
+object KafkaJMX extends Logging {
   
-  private[this] lazy val logger = LoggerFactory.getLogger(this.getClass)
-  
-  private[this] val jmxConnectorProperties : java.util.Map[String, _] = {
-    import scala.collection.JavaConverters._
-    Map(
-      "jmx.remote.x.request.waiting.timeout" -> "3000",
-      "jmx.remote.x.notification.fetch.timeout" -> "3000",
-      "sun.rmi.transport.connectionTimeout" -> "3000",
-      "sun.rmi.transport.tcp.handshakeTimeout" -> "3000",
-      "sun.rmi.transport.tcp.responseTimeout" -> "3000"
-    ).asJava
-  }
+  private[this] val defaultJmxConnectorProperties = Map[String, Any] (
+    "jmx.remote.x.request.waiting.timeout" -> "3000",
+    "jmx.remote.x.notification.fetch.timeout" -> "3000",
+    "sun.rmi.transport.connectionTimeout" -> "3000",
+    "sun.rmi.transport.tcp.handshakeTimeout" -> "3000",
+    "sun.rmi.transport.tcp.responseTimeout" -> "3000"
+  )
 
-  def doWithConnection[T](jmxHost: String, jmxPort: Int)(fn: MBeanServerConnection => T) : Try[T] = {
+  def doWithConnection[T](jmxHost: String, jmxPort: Int, jmxUser: Option[String], jmxPass: Option[String], jmxSsl: Boolean)(fn: MBeanServerConnection => T) : Try[T] = {
     val urlString = s"service:jmx:rmi:///jndi/rmi://$jmxHost:$jmxPort/jmxrmi"
     val url = new JMXServiceURL(urlString)
     try {
       require(jmxPort > 0, "No jmx port but jmx polling enabled!")
-      val jmxc = JMXConnectorFactory.connect(url, jmxConnectorProperties)
+      val credsProps: Option[Map[String, _]] = for {
+        user <- jmxUser
+        pass <- jmxPass
+      } yield {
+        Map(JMXConnector.CREDENTIALS -> Array(user, pass))
+      }
+      val sslProps: Option[Map[String, _]] = if (jmxSsl) {
+        val clientSocketFactory = new SslRMIClientSocketFactory()
+        Some(Map(
+          Context.SECURITY_PROTOCOL -> "ssl",
+          RMIConnectorServer.RMI_CLIENT_SOCKET_FACTORY_ATTRIBUTE -> clientSocketFactory,
+          "com.sun.jndi.rmi.factory.socket" -> clientSocketFactory
+        ))
+      } else {
+        None
+      }
+      val jmxConnectorProperties = List(credsProps, sslProps).flatten.foldRight(defaultJmxConnectorProperties)(_ ++ _)
+      val jmxc = JMXConnectorFactory.connect(url, jmxConnectorProperties.asJava)
       try {
         Try {
           fn(jmxc.getMBeanServerConnection)
@@ -279,7 +292,8 @@ object KafkaMetrics {
     stats.groupBy(_._1).mapValues(_.map(_._2).toMap).toMap
   }
 
-  def getBrokerMetrics(kafkaVersion: KafkaVersion, mbsc: MBeanServerConnection, shouldGetBrokerSize: Boolean, topic: Option[String] = None) : BrokerMetrics = {
+  // return broker metrics with segment metric only when it's provided. if not, it will contain segment metric with value 0L
+  def getBrokerMetrics(kafkaVersion: KafkaVersion, mbsc: MBeanServerConnection, segmentsMetric: Option[SegmentsMetric] = None, topic: Option[String] = None) : BrokerMetrics = {
     BrokerMetrics(
       KafkaMetrics.getBytesInPerSec(kafkaVersion, mbsc, topic),
       KafkaMetrics.getBytesOutPerSec(kafkaVersion, mbsc, topic),
@@ -288,18 +302,8 @@ object KafkaMetrics {
       KafkaMetrics.getFailedProduceRequestsPerSec(kafkaVersion, mbsc, topic),
       KafkaMetrics.getMessagesInPerSec(kafkaVersion, mbsc, topic),
       KafkaMetrics.getOSMetric(mbsc),
-      KafkaMetrics.getSegmentsMetric(mbsc, shouldGetBrokerSize)
+      segmentsMetric.getOrElse(SegmentsMetric(0L))
     )
-  }
-
-  // always contains the total bytes size a broker has
-  def getSegmentsMetric(mbsc: MBeanServerConnection, shouldGetBrokerSize: Boolean) : SegmentsMetric = {
-    if (shouldGetBrokerSize) {
-      val segmentsInfo = getLogSegmentsInfo(mbsc)
-      SegmentsMetric(segmentsInfo.values.map(_.values.map(_.bytes).sum).sum)
-    } else {
-      SegmentsMetric(0L)
-    }
   }
 }
 

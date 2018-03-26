@@ -6,16 +6,19 @@
 package controllers
 
 import features.ApplicationFeatures
+import models.navigation.Menus
+import play.api.i18n.{I18nSupport, MessagesApi}
 import play.api.mvc._
 
 /**
  * @author cvcal
  */
-object Consumer extends Controller{
+class Consumer (val messagesApi: MessagesApi, val kafkaManagerContext: KafkaManagerContext)
+               (implicit af: ApplicationFeatures, menus: Menus) extends Controller with I18nSupport {
+
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-  private[this] val kafkaManager = KafkaManagerContext.getKafkaManager
-  private[this] implicit val af: ApplicationFeatures = ApplicationFeatures.features
+  private[this] val kafkaManager = kafkaManagerContext.getKafkaManager
 
   def consumers(cluster: String) = Action.async {
     kafkaManager.getConsumerListExtended(cluster).map { errorOrConsumerList =>
@@ -23,15 +26,15 @@ object Consumer extends Controller{
     }
   }
 
-  def consumer(cluster: String, consumerGroup: String) = Action.async {
-    kafkaManager.getConsumerIdentity(cluster,consumerGroup).map { errorOrConsumerIdentity =>
+  def consumer(cluster: String, consumerGroup: String, consumerType: String) = Action.async {
+    kafkaManager.getConsumerIdentity(cluster,consumerGroup, consumerType).map { errorOrConsumerIdentity =>
       Ok(views.html.consumer.consumerView(cluster,consumerGroup,errorOrConsumerIdentity))
     }
   }
 
-  def consumerAndTopic(cluster: String, consumerGroup: String, topic: String) = Action.async {
-    kafkaManager.getConsumedTopicState(cluster,consumerGroup,topic).map { errorOrConsumedTopicState =>
-      Ok(views.html.consumer.consumedTopicView(cluster,consumerGroup,topic,errorOrConsumedTopicState))
+  def consumerAndTopic(cluster: String, consumerGroup: String, topic: String, consumerType: String) = Action.async {
+    kafkaManager.getConsumedTopicState(cluster,consumerGroup,topic, consumerType).map { errorOrConsumedTopicState =>
+      Ok(views.html.consumer.consumedTopicView(cluster,consumerGroup,consumerType,topic,errorOrConsumedTopicState))
     }
   }
 }

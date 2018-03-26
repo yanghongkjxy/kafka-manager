@@ -7,7 +7,7 @@ package kafka.manager.utils
 
 import java.util.Properties
 
-import kafka.manager.{Kafka_0_8_2_1, Kafka_0_8_2_0, Kafka_0_8_1_1, KafkaVersion}
+import kafka.manager.model._
 
 trait LogkafkaNewConfigs {
   def configNames : Set[String]
@@ -20,7 +20,19 @@ object LogkafkaNewConfigs {
   val logkafkaConfigsByVersion : Map[KafkaVersion, LogkafkaNewConfigs] = Map(
     Kafka_0_8_1_1 -> logkafka81.LogConfig, 
     Kafka_0_8_2_0 -> logkafka82.LogConfig,
-    Kafka_0_8_2_1 -> logkafka82.LogConfig
+    Kafka_0_8_2_1 -> logkafka82.LogConfig,
+    Kafka_0_8_2_2 -> logkafka82.LogConfig,
+    Kafka_0_9_0_0 -> logkafka82.LogConfig,
+    Kafka_0_9_0_1 -> logkafka82.LogConfig,
+    Kafka_0_10_0_0 -> logkafka82.LogConfig,
+    Kafka_0_10_0_1 -> logkafka82.LogConfig,
+    Kafka_0_10_1_0 -> logkafka82.LogConfig,
+    Kafka_0_10_1_1 -> logkafka82.LogConfig,
+    Kafka_0_10_2_0 -> logkafka82.LogConfig,
+    Kafka_0_10_2_1 -> logkafka82.LogConfig,
+    Kafka_0_11_0_0 -> logkafka82.LogConfig,
+    Kafka_0_11_0_2 -> logkafka82.LogConfig,
+    Kafka_1_0_0 -> logkafka82.LogConfig
     )
 
   def configNames(version: KafkaVersion) : Set[String] = {

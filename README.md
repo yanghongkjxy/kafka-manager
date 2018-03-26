@@ -65,9 +65,8 @@ Broker View
 Requirements
 ------------
 
-1. [Kafka 0.8.1.1 or 0.8.2.1](http://kafka.apache.org/downloads.html)
-2. [sbt 0.13.x](http://www.scala-sbt.org/download.html)
-3. Java 8+
+1. [Kafka 0.8.*.* or 0.9.*.* or 0.10.*.* or 0.11.*.*](http://kafka.apache.org/downloads.html)
+2. Java 8+
 
 Configuration
 -------------
@@ -95,21 +94,44 @@ You can optionally enable/disable the following functionality by modifying the d
  - KMPreferredReplicaElectionFeature - allows running of preferred replica election for a Kafka cluster
  - KMReassignPartitionsFeature - allows generating partition assignments and reassigning partitions
 
+Consider setting these parameters for larger clusters with jmx enabled :
+
+ - kafka-manager.broker-view-thread-pool-size=< 3 * number_of_brokers>
+ - kafka-manager.broker-view-max-queue-size=< 3 * total # of partitions across all topics>
+ - kafka-manager.broker-view-update-seconds=< kafka-manager.broker-view-max-queue-size / (10 * number_of_brokers) >
+
+Here is an example for a kafka cluster with 10 brokers, 100 topics, with each topic having 10 partitions giving 1000 total partitions with JMX enabled :
+
+ - kafka-manager.broker-view-thread-pool-size=30
+ - kafka-manager.broker-view-max-queue-size=3000
+ - kafka-manager.broker-view-update-seconds=30
+
+The follow control consumer offset cache's thread pool and queue :
+
+ - kafka-manager.offset-cache-thread-pool-size=< default is # of processors>
+ - kafka-manager.offset-cache-max-queue-size=< default is 1000>
+ - kafka-manager.kafka-admin-client-thread-pool-size=< default is # of processors>
+ - kafka-manager.kafka-admin-client-max-queue-size=< default is 1000>
+
+You should increase the above for large # of consumers with consumer polling enabled.  Though it mainly affects ZK based consumer polling.
+
+Kafka managed consumer offset is now consumed by KafkaManagedOffsetCache from the "__consumer_offsets" topic.  Note, this has not been tested with large number of offsets being tracked.  There is a single thread per cluster consuming this topic so it may not be able to keep up on large # of offsets being pushed to the topic.
+
 Deployment
 ----------
 
 The command below will create a zip file which can be used to deploy the application.
 
-    sbt clean dist
+    ./sbt clean dist
 
-Please refer to play framework documentation on production deployment.
+Please refer to play framework documentation on [production deployment/configuration](https://www.playframework.com/documentation/2.4.x/ProductionConfiguration).
 
 If java is not in your path, or you need to build against a specific java version,
 please use the following (the example assumes oracle java8):
 
     $ PATH=/usr/local/oracle-java-8/bin:$PATH \
       JAVA_HOME=/usr/local/oracle-java-8 \
-      /path/to/sbt -java-home /usr/local/oracle-java-8 dist clean
+      /path/to/sbt -java-home /usr/local/oracle-java-8 clean dist
 
 This ensures that the 'java' and 'javac' binaries in your path are first looked up in the
 oracle java8 release. Next, for all downstream tools that only listen to JAVA_HOME, it points
@@ -133,6 +155,16 @@ Again, if java is not in your path, or you need to run against a different versi
 add the -java-home option as follows:
 
     $ bin/kafka-manager -java-home /usr/local/oracle-java-8
+
+Starting the service with Security
+----------------------------------
+
+To add JAAS configuration for SASL, add the config file location at start:
+
+    $ bin/kafka-manager -Djava.security.auth.login.config=/path/to/my-jaas.conf
+
+NOTE: Make sure the user running kafka manager has read permissions on the jaas config file
+
 
 Packaging
 ---------

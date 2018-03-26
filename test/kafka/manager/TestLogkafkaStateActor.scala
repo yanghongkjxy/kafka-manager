@@ -12,6 +12,8 @@ import akka.util.Timeout
 import akka.util.Timeout._
 import com.typesafe.config.{Config, ConfigFactory}
 import kafka.manager.features.ClusterFeatures
+import kafka.manager.logkafka.LogkafkaStateActor
+import kafka.manager.model.{ClusterContext, ClusterConfig, ActorModel}
 import kafka.manager.utils.KafkaServerInTest
 import ActorModel._
 import kafka.test.SeededBroker
@@ -24,7 +26,7 @@ import scala.util.Try
 /**
  * @author hiral
  */
-class TestLogkafkaStateActor extends KafkaServerInTest {
+class TestLogkafkaStateActor extends KafkaServerInTest with BaseTest {
 
   private[this] val akkaConfig: Properties = new Properties()
   akkaConfig.setProperty("pinned-dispatcher.type","PinnedDispatcher")
@@ -35,7 +37,7 @@ class TestLogkafkaStateActor extends KafkaServerInTest {
   override val kafkaServerZkPath = broker.getZookeeperConnectionString
   private[this] var logkafkaStateActor : Option[ActorRef] = None
   private[this] implicit val timeout: Timeout = 10.seconds
-  private[this] val defaultClusterConfig = ClusterConfig("test","0.8.2.0","localhost:2818",100,false,true)
+  private[this] val defaultClusterConfig = ClusterConfig("test","0.8.2.0","localhost:2818",100,false, pollConsumers = true, filterConsumers = true, jmxUser = None, jmxPass = None, jmxSsl = false, tuning = Option(defaultTuning), securityProtocol="PLAINTEXT")
   private[this] val defaultClusterContext = ClusterContext(ClusterFeatures.from(defaultClusterConfig), defaultClusterConfig)
 
   override protected def beforeAll(): Unit = {
@@ -59,25 +61,25 @@ class TestLogkafkaStateActor extends KafkaServerInTest {
     fn(result)
   }
 
-  test("get logkafka hostname list") {
-    withLogkafkaStateActor(LKSGetLogkafkaHostnames) { result: LogkafkaHostnameList =>
+  test("get logkafka logkafka id list") {
+    withLogkafkaStateActor(LKSGetLogkafkaLogkafkaIds) { result: LogkafkaLogkafkaIdList =>
       result.list foreach println
     }
   }
 
   test("get logkafka config") {
-    withLogkafkaStateActor(LKSGetLogkafkaHostnames) { result: LogkafkaHostnameList =>
-      val configs = result.list map { hostname =>
-        withLogkafkaStateActor(LKSGetLogkafkaConfig(hostname)) { logkafkaConfig: LogkafkaConfig => logkafkaConfig }
+    withLogkafkaStateActor(LKSGetLogkafkaLogkafkaIds) { result: LogkafkaLogkafkaIdList =>
+      val configs = result.list map { logkafka_id =>
+        withLogkafkaStateActor(LKSGetLogkafkaConfig(logkafka_id)) { logkafkaConfig: LogkafkaConfig => logkafkaConfig }
       }
       configs foreach println
     }
   }
 
   test("get logkafka client") {
-    withLogkafkaStateActor(LKSGetLogkafkaHostnames) { result: LogkafkaHostnameList =>
-      val clients = result.list map { hostname =>
-        withLogkafkaStateActor(LKSGetLogkafkaClient(hostname)) { logkafkaClient: LogkafkaClient => logkafkaClient }
+    withLogkafkaStateActor(LKSGetLogkafkaLogkafkaIds) { result: LogkafkaLogkafkaIdList =>
+      val clients = result.list map { logkafka_id =>
+        withLogkafkaStateActor(LKSGetLogkafkaClient(logkafka_id)) { logkafkaClient: LogkafkaClient => logkafkaClient }
       }
       clients foreach println
     }

@@ -3,13 +3,13 @@
  * See accompanying LICENSE file.
  */
 
-package kafka.manager
+package kafka.manager.base
 
-import java.util.concurrent.{LinkedBlockingQueue, TimeUnit, ThreadPoolExecutor}
+import java.util.concurrent.{LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
 
 import akka.pattern._
 
-import scala.concurrent.{Future, ExecutionContext}
+import scala.concurrent.{ExecutionContext, Future}
 import scala.reflect.ClassTag
 import scala.util.Try
 
@@ -39,13 +39,13 @@ trait LongRunningPoolActor extends BaseActor {
     super.postStop()
   }
 
-   protected def longRunning[T](fn: => Future[T])(implicit ec: ExecutionContext, ct: ClassTag[T]) : Unit = {
+  protected def longRunning[T](fn: => Future[T])(implicit ec: ExecutionContext, ct: ClassTag[T]) : Unit = {
     if(longRunningExecutor.getQueue.remainingCapacity() == 0) {
       longRunningQueueFull()
     } else {
       fn match {
         case _ if ct.runtimeClass == classOf[Unit] =>
-          //do nothing with unit
+        //do nothing with unit
         case f =>
           f pipeTo sender
       }

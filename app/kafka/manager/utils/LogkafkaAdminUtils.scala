@@ -19,18 +19,14 @@ package kafka.manager.utils
 
 import java.util.Properties
 
-import kafka.manager.{Kafka_0_8_2_0, KafkaVersion}
+import grizzled.slf4j.Logging
+import kafka.manager.model.{Kafka_0_8_2_0, KafkaVersion, ActorModel}
 import org.apache.curator.framework.CuratorFramework
-import org.apache.zookeeper.CreateMode
-import org.apache.zookeeper.KeeperException.NodeExistsException
-import org.slf4j.LoggerFactory
 
 import scala.collection.mutable
 import scala.util.Random
 
-class LogkafkaAdminUtils(version: KafkaVersion) {
-
-  private[this] lazy val logger = LoggerFactory.getLogger(this.getClass)
+class LogkafkaAdminUtils(version: KafkaVersion) extends Logging {
 
   val rand = new Random
 
@@ -42,39 +38,39 @@ class LogkafkaAdminUtils(version: KafkaVersion) {
   }
 
   def deleteLogkafka(curator: CuratorFramework, 
-                   hostname: String, 
+                   logkafka_id: String, 
                    log_path: String, 
-                   logkafkaConfigOption: Option[kafka.manager.ActorModel.LogkafkaConfig]): Unit = {
+                   logkafkaConfigOption: Option[ActorModel.LogkafkaConfig]): Unit = {
     logkafkaConfigOption.map { lcg =>
       lcg.config.map { c => 
-        val configMap =kafka.manager.utils.Logkafka.parseJsonStr(hostname, c)
+        val configMap =kafka.manager.utils.Logkafka.parseJsonStr(logkafka_id, c)
         if (!configMap.isEmpty || !(configMap - log_path).isEmpty ) { 
-          writeLogkafkaConfig(curator, hostname, configMap - log_path, -1)
+          writeLogkafkaConfig(curator, logkafka_id, configMap - log_path, -1)
         }
-      } getOrElse { LogkafkaErrors.HostnameNotExists(hostname) }
-    } getOrElse { LogkafkaErrors.HostnameNotExists(hostname) }
+      } getOrElse { LogkafkaErrors.LogkafkaIdNotExists(logkafka_id) }
+    } getOrElse { LogkafkaErrors.LogkafkaIdNotExists(logkafka_id) }
   }
 
   def createLogkafka(curator: CuratorFramework,
-                  hostname: String,
+                  logkafka_id: String,
                   log_path: String,
                   config: Properties = new Properties,
-                  logkafkaConfigOption: Option[kafka.manager.ActorModel.LogkafkaConfig] = None
+                  logkafkaConfigOption: Option[ActorModel.LogkafkaConfig] = None
                   ): Unit = {
-    createOrUpdateLogkafkaConfigPathInZK(curator, hostname, log_path, config, logkafkaConfigOption)
+    createOrUpdateLogkafkaConfigPathInZK(curator, logkafka_id, log_path, config, logkafkaConfigOption)
   }
 
   def createOrUpdateLogkafkaConfigPathInZK(curator: CuratorFramework,
-                                           hostname: String,
+                                           logkafka_id: String,
                                            log_path: String,
                                            config: Properties = new Properties,
-                                           logkafkaConfigOption: Option[kafka.manager.ActorModel.LogkafkaConfig],
+                                           logkafkaConfigOption: Option[ActorModel.LogkafkaConfig],
                                            update: Boolean = false,
                                            readVersion: Int = -1,
                                            checkConfig: Boolean = true 
                                            ) {
     // validate arguments
-    Logkafka.validateHostname(hostname)
+    Logkafka.validateLogkafkaId(logkafka_id)
     Logkafka.validatePath(log_path)
 
     if (checkConfig) {
@@ -89,44 +85,44 @@ class LogkafkaAdminUtils(version: KafkaVersion) {
 
     val logkafkaConfigMap = logkafkaConfigOption.map { lcg =>
       lcg.config.map { c =>
-        kafka.manager.utils.Logkafka.parseJsonStr(hostname, c)
+        kafka.manager.utils.Logkafka.parseJsonStr(logkafka_id, c)
       } getOrElse { Map.empty }
     } getOrElse { Map.empty }
 
     if(!update ) {
       // write out the config on create, not update, if there is any
-      writeLogkafkaConfig(curator, hostname, logkafkaConfigMap ++ newConfigMap, readVersion)
+      writeLogkafkaConfig(curator, logkafka_id, logkafkaConfigMap ++ newConfigMap, readVersion)
     } else {
       val merged = logkafkaConfigMap.toSeq ++ newConfigMap.toSeq
       val grouped = merged.groupBy(_._1)
       val cleaned = grouped.mapValues(_.map(_._2).fold(Map.empty)(_ ++ _))
-      writeLogkafkaConfig(curator, hostname, cleaned, readVersion)
+      writeLogkafkaConfig(curator, logkafka_id, cleaned, readVersion)
     }
   }
 
   /**
-   * Update the config for an existing (hostname,log_path)
+   * Update the config for an existing (logkafka_id,log_path)
    * @param curator: The zk client handle used to write the new config to zookeeper
-   * @param hostname: The hostname for which configs are being changed
+   * @param logkafka_id: The logkafka_id for which configs are being changed
    * @param log_path: The log_path for which configs are being changed
    * @param config: The final set of configs that will be applied to the topic. If any new configs need to be added or
    *                 existing configs need to be deleted, it should be done prior to invoking this API
    *
    */
   def changeLogkafkaConfig(curator: CuratorFramework,
-                  hostname: String,
+                  logkafka_id: String,
                   log_path: String,
                   config: Properties = new Properties,
-                  logkafkaConfigOption: Option[kafka.manager.ActorModel.LogkafkaConfig],
+                  logkafkaConfigOption: Option[ActorModel.LogkafkaConfig],
                   checkConfig: Boolean = true
                   ): Unit = {
-    createOrUpdateLogkafkaConfigPathInZK(curator, hostname, log_path, config, logkafkaConfigOption, true, -1, checkConfig)
+    createOrUpdateLogkafkaConfigPathInZK(curator, logkafka_id, log_path, config, logkafkaConfigOption, true, -1, checkConfig)
   }
 
   /**
    * Write out the logkafka config to zk, if there is any
    */
-  private def writeLogkafkaConfig(curator: CuratorFramework, hostname: String, configMap: Map[String, Map[String, String]], readVersion: Int = -1) {
-    ZkUtils.updatePersistentPath(curator, LogkafkaZkUtils.getLogkafkaConfigPath(hostname), toJson(configMap), readVersion)
+  private def writeLogkafkaConfig(curator: CuratorFramework, logkafka_id: String, configMap: Map[String, Map[String, String]], readVersion: Int = -1) {
+    ZkUtils.updatePersistentPath(curator, LogkafkaZkUtils.getLogkafkaConfigPath(logkafka_id), toJson(configMap), readVersion)
   }
 }

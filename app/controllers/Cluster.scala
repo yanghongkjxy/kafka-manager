@@ -5,28 +5,32 @@
 
 package controllers
 
-import features.{KMClusterManagerFeature, ApplicationFeatures}
-import kafka.manager.{KafkaVersion, ApiError, ClusterConfig}
+import features.{ApplicationFeatures, KMClusterManagerFeature}
+import kafka.manager.model._
+import kafka.manager.ApiError
 import models.FollowLink
 import models.form._
+import models.navigation.Menus
 import play.api.data.Form
 import play.api.data.Forms._
-import play.api.data.validation.{Valid, Invalid, Constraint}
+import play.api.data.validation.{Constraint, Invalid, Valid}
 import play.api.data.validation.Constraints._
+import play.api.i18n.{I18nSupport, MessagesApi}
 import play.api.mvc._
 
 import scala.concurrent.Future
-import scala.util.{Success, Failure, Try}
+import scala.util.{Failure, Success, Try}
 import scalaz.{-\/, \/-}
 
 /**
  * @author hiral
  */
-object Cluster extends Controller {
+class Cluster (val messagesApi: MessagesApi, val kafkaManagerContext: KafkaManagerContext)
+              (implicit af: ApplicationFeatures, menus: Menus) extends Controller with I18nSupport {
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-  private[this] val kafkaManager = KafkaManagerContext.getKafkaManager
-  private[this] implicit val af: ApplicationFeatures = ApplicationFeatures.features
+  private[this] val kafkaManager = kafkaManagerContext.getKafkaManager
+  private[this] val defaultTuning = kafkaManager.defaultTuning
 
   val validateName : Constraint[String] = Constraint("validate name") { name =>
     Try {
@@ -63,17 +67,50 @@ object Cluster extends Controller {
     }
   }
 
+  val validateSecurityProtocol: Constraint[String] = Constraint("validate security protocol") { string =>
+    Try {
+      SecurityProtocol(string)
+    } match {
+      case Failure(t) => Invalid(t.getMessage)
+      case Success(_) => Valid
+    }
+  }
+
   val clusterConfigForm = Form(
     mapping(
-      "name" -> nonEmptyText.verifying(maxLength(250), validateName),
-      "kafkaVersion" -> nonEmptyText.verifying(validateKafkaVersion),
-      "zkHosts" -> nonEmptyText.verifying(validateZkHosts),
-      "zkMaxRetry" -> ignored(100 : Int),
-      "jmxEnabled" -> boolean,
-      "filterConsumers" -> boolean,
-      "logkafkaEnabled" -> boolean,
-      "activeOffsetCacheEnabled" -> boolean,
-      "displaySizeEnabled" -> boolean
+      "name" -> nonEmptyText.verifying(maxLength(250), validateName)
+      , "kafkaVersion" -> nonEmptyText.verifying(validateKafkaVersion)
+      , "zkHosts" -> nonEmptyText.verifying(validateZkHosts)
+      , "zkMaxRetry" -> ignored(100 : Int)
+      , "jmxEnabled" -> boolean
+      , "jmxUser" -> optional(text)
+      , "jmxPass" -> optional(text)
+      , "jmxSsl" -> boolean
+      , "pollConsumers" -> boolean
+      , "filterConsumers" -> boolean
+      , "logkafkaEnabled" -> boolean
+      , "activeOffsetCacheEnabled" -> boolean
+      , "displaySizeEnabled" -> boolean
+      , "tuning" -> optional(
+        mapping(
+          "brokerViewUpdatePeriodSeconds" -> optional(number(10, 1000))
+          , "clusterManagerThreadPoolSize" -> optional(number(2, 1000))
+          , "clusterManagerThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "kafkaCommandThreadPoolSize" -> optional(number(2, 1000))
+          , "kafkaCommandThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "logkafkaCommandThreadPoolSize" -> optional(number(2, 1000))
+          , "logkafkaCommandThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "logkafkaUpdatePeriodSeconds" -> optional(number(10, 1000))
+          , "partitionOffsetCacheTimeoutSecs" -> optional(number(5, 100))
+          , "brokerViewThreadPoolSize" -> optional(number(2, 1000))
+          , "brokerViewThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "offsetCacheThreadPoolSize" -> optional(number(2, 1000))
+          , "offsetCacheThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "kafkaAdminClientThreadPoolSize" -> optional(number(2, 1000))
+          , "kafkaAdminClientThreadPoolQueueSize" -> optional(number(10, 10000))
+        )(ClusterTuning.apply)(ClusterTuning.unapply)
+      )
+      , "securityProtocol" -> nonEmptyText.verifying(validateSecurityProtocol)
     )(ClusterConfig.apply)(ClusterConfig.customUnapply)
   )
 
@@ -85,19 +122,63 @@ object Cluster extends Controller {
       "zkHosts" -> nonEmptyText.verifying(validateZkHosts),
       "zkMaxRetry" -> ignored(100 : Int),
       "jmxEnabled" -> boolean,
+      "jmxUser" -> optional(text),
+      "jmxPass" -> optional(text),
+      "jmxSsl" -> boolean,
+      "pollConsumers" -> boolean,
       "filterConsumers" -> boolean,
       "logkafkaEnabled" -> boolean,
       "activeOffsetCacheEnabled" -> boolean,
-      "displaySizeEnabled" -> boolean
+      "displaySizeEnabled" -> boolean,
+      "tuning" -> optional(
+        mapping(
+          "brokerViewUpdatePeriodSeconds" -> optional(number(10, 1000))
+          , "clusterManagerThreadPoolSize" -> optional(number(2, 1000))
+          , "clusterManagerThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "kafkaCommandThreadPoolSize" -> optional(number(2, 1000))
+          , "kafkaCommandThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "logkafkaCommandThreadPoolSize" -> optional(number(2, 1000))
+          , "logkafkaCommandThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "logkafkaUpdatePeriodSeconds" -> optional(number(10, 1000))
+          , "partitionOffsetCacheTimeoutSecs" -> optional(number(5, 100))
+          , "brokerViewThreadPoolSize" -> optional(number(2, 1000))
+          , "brokerViewThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "offsetCacheThreadPoolSize" -> optional(number(2, 1000))
+          , "offsetCacheThreadPoolQueueSize" -> optional(number(10, 10000))
+          , "kafkaAdminClientThreadPoolSize" -> optional(number(2, 1000))
+          , "kafkaAdminClientThreadPoolQueueSize" -> optional(number(10, 10000))
+        )(ClusterTuning.apply)(ClusterTuning.unapply)
+      )
+      , "securityProtocol" -> nonEmptyText.verifying(validateSecurityProtocol)
     )(ClusterOperation.apply)(ClusterOperation.customUnapply)
   )
+
+  private[this] val defaultClusterConfig : ClusterConfig = {
+    ClusterConfig(
+      ""
+      ,CuratorConfig("")
+      ,false
+      ,KafkaVersion.supportedVersions.values.toList.sortBy(_.toString).last
+      ,false
+      ,None
+      ,None
+      ,false
+      ,false
+      ,false
+      ,false
+      ,false
+      ,false
+      ,Option(defaultTuning)
+      ,PLAINTEXT
+    )
+  }
 
   def cluster(c: String) = Action.async {
     kafkaManager.getClusterView(c).map { errorOrClusterView =>
       Ok(views.html.cluster.clusterView(c,errorOrClusterView))
     }
   }
-  
+
   def brokers(c: String) = Action.async {
     kafkaManager.getBrokerList(c).map { errorOrBrokerList =>
       Ok(views.html.broker.brokerList(c,errorOrBrokerList))
@@ -109,10 +190,10 @@ object Cluster extends Controller {
       Ok(views.html.broker.brokerView(c,b,errorOrBrokerView))
     }
   }
-  
+
   def addCluster = Action.async { implicit request =>
     featureGate(KMClusterManagerFeature) {
-      Future.successful(Ok(views.html.cluster.addCluster(clusterConfigForm)))
+      Future.successful(Ok(views.html.cluster.addCluster(clusterConfigForm.fill(defaultClusterConfig))))
     }
   }
 
@@ -127,14 +208,21 @@ object Cluster extends Controller {
             cc.curatorConfig.zkConnect,
             cc.curatorConfig.zkMaxRetry,
             cc.jmxEnabled,
+            cc.jmxUser,
+            cc.jmxPass,
+            cc.jmxSsl,
+            cc.pollConsumers,
             cc.filterConsumers,
             cc.logkafkaEnabled,
             cc.activeOffsetCacheEnabled,
-            cc.displaySizeEnabled))
+            cc.displaySizeEnabled,
+            cc.tuning,
+            cc.securityProtocol.stringId
+          ))
         }))
       }
     }
-      
+
   }
 
   def handleAddCluster = Action.async { implicit request =>
@@ -146,7 +234,13 @@ object Cluster extends Controller {
             clusterConfig.version.toString,
             clusterConfig.curatorConfig.zkConnect,
             clusterConfig.jmxEnabled,
+            clusterConfig.jmxUser,
+            clusterConfig.jmxPass,
+            clusterConfig.jmxSsl,
+            clusterConfig.pollConsumers,
             clusterConfig.filterConsumers,
+            clusterConfig.tuning,
+            clusterConfig.securityProtocol.stringId,
             clusterConfig.logkafkaEnabled,
             clusterConfig.activeOffsetCacheEnabled,
             clusterConfig.displaySizeEnabled
@@ -209,7 +303,13 @@ object Cluster extends Controller {
               clusterOperation.clusterConfig.version.toString,
               clusterOperation.clusterConfig.curatorConfig.zkConnect,
               clusterOperation.clusterConfig.jmxEnabled,
+              clusterOperation.clusterConfig.jmxUser,
+              clusterOperation.clusterConfig.jmxPass,
+              clusterOperation.clusterConfig.jmxSsl,
+              clusterOperation.clusterConfig.pollConsumers,
               clusterOperation.clusterConfig.filterConsumers,
+              clusterOperation.clusterConfig.tuning,
+              clusterOperation.clusterConfig.securityProtocol.stringId,
               clusterOperation.clusterConfig.logkafkaEnabled,
               clusterOperation.clusterConfig.activeOffsetCacheEnabled,
               clusterOperation.clusterConfig.displaySizeEnabled

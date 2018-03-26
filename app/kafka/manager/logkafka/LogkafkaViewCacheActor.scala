@@ -3,19 +3,20 @@
  * See accompanying LICENSE file.
  */
 
-package kafka.manager
+package kafka.manager.logkafka
 
-import akka.actor.{ActorRef, Cancellable, ActorPath}
+import akka.actor.{ActorPath, Cancellable}
+import kafka.manager.model.{ClusterContext, ActorModel}
+import ActorModel._
+import kafka.manager.base.{LongRunningPoolActor, LongRunningPoolConfig}
 import kafka.manager.features.KMLogKafkaFeature
-import scala.collection.mutable
-import scala.concurrent.Future
+
 import scala.concurrent.duration._
 import scala.util.Try
 
 /**
  * @author hiral
  */
-import ActorModel._
 case class LogkafkaViewCacheActorConfig(logkafkaStateActorPath: ActorPath, 
                                       clusterContext: ClusterContext,
                                       longRunningPoolConfig: LongRunningPoolConfig, 
@@ -96,8 +97,8 @@ class LogkafkaViewCacheActor(config: LogkafkaViewCacheActorConfig) extends LongR
       logkafkaConfigs <- logkafkaConfigsOption
       logkafkaClients <- logkafkaClientsOption
     } {
-      val lcgMap = Map(logkafkaConfigs.configs map { a => a.hostname -> a }: _*)
-      val lctMap = Map(logkafkaClients.clients map { a => a.hostname -> a }: _*)
+      val lcgMap = Map(logkafkaConfigs.configs map { a => a.logkafka_id -> a }: _*)
+      val lctMap = Map(logkafkaClients.clients map { a => a.logkafka_id -> a }: _*)
       logkafkaIdentities = lcgMap.map (kv =>
         kv._1 -> LogkafkaIdentity.from(kv._1, Some(kv._2), lctMap.get(kv._1)))
     }

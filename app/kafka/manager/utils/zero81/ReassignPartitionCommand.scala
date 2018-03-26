@@ -17,12 +17,13 @@
 
 package kafka.manager.utils.zero81
 
+import grizzled.slf4j.Logging
 import kafka.common.TopicAndPartition
+import kafka.manager.model.ActorModel
 import kafka.manager.utils._
-import kafka.manager.ActorModel.{TopicPartitionIdentity, TopicIdentity}
+import ActorModel.{TopicPartitionIdentity, TopicIdentity}
 import org.apache.curator.framework.CuratorFramework
 import org.apache.zookeeper.KeeperException.NodeExistsException
-import org.slf4j.LoggerFactory
 
 import scala.util.Try
 
@@ -31,13 +32,12 @@ import scala.util.Try
  * https://git-wip-us.apache.org/repos/asf?p=kafka.git;a=blob;f=core/src/main/scala/kafka/admin/ReassignPartitionsCommand.scala
  */
 import kafka.manager.utils.zero81.ReassignPartitionErrors._
+sealed trait ForceReassignmentCommand
+case object ForceOnReplicationOutOfSync extends ForceReassignmentCommand
 
-class ReassignPartitionCommand(adminUtils: AdminUtils) {
+class ReassignPartitionCommand(adminUtils: AdminUtils) extends Logging {
 
-
-  private[this] val logger = LoggerFactory.getLogger(this.getClass)
-
-  def generateAssignment(brokerList: Seq[Int], currentTopicIdentity: TopicIdentity): Try[TopicIdentity] = {
+  def generateAssignment(brokerList: Set[Int], currentTopicIdentity: TopicIdentity): Try[TopicIdentity] = {
     Try {
       val assignedReplicas = adminUtils.assignReplicasToBrokers(
         brokerList,
@@ -65,23 +65,26 @@ class ReassignPartitionCommand(adminUtils: AdminUtils) {
     }
   }
 
-  def validateAssignment(current: TopicIdentity, generated: TopicIdentity): Unit = {
+  def validateAssignment(current: TopicIdentity, generated: TopicIdentity, forceSet: Set[ForceReassignmentCommand]): Unit = {
     //perform validation
 
     checkCondition(generated.partitionsIdentity.nonEmpty, ReassignmentDataEmptyForTopic(current.topic))
     checkCondition(current.partitions == generated.partitions, PartitionsOutOfSync(current.partitions, generated.partitions))
-    checkCondition(current.replicationFactor == generated.replicationFactor, ReplicationOutOfSync(current.replicationFactor, generated.replicationFactor))
+    checkCondition(current.replicationFactor == generated.replicationFactor
+      || forceSet(ForceOnReplicationOutOfSync)
+      , ReplicationOutOfSync(current.replicationFactor, generated.replicationFactor))
   }
 
-  def getValidAssignments(currentTopicIdentity: Map[String, TopicIdentity],
-                          generatedTopicIdentity: Map[String, TopicIdentity]): Try[Map[TopicAndPartition, Seq[Int]]] = {
+  def getValidAssignments(currentTopicIdentity: Map[String, TopicIdentity]
+                          , generatedTopicIdentity: Map[String, TopicIdentity]
+                          , forceSet: Set[ForceReassignmentCommand]): Try[Map[TopicAndPartition, Seq[Int]]] = {
     Try {
       currentTopicIdentity.flatMap { case (topic, current) =>
         generatedTopicIdentity.get(topic).fold {
           logger.info(s"No generated assignment found for topic=$topic, skipping")
           Map.empty[TopicAndPartition, Seq[Int]]
         } { generated =>
-          validateAssignment(current, generated)
+          validateAssignment(current, generated, forceSet)
           for {
           //match up partitions from current to generated
             (currentPart, currentTpi) <- current.partitionsIdentity
@@ -97,10 +100,11 @@ class ReassignPartitionCommand(adminUtils: AdminUtils) {
     }
   }
 
-  def executeAssignment(curator: CuratorFramework,
-                        currentTopicIdentity: Map[String, TopicIdentity],
-                        generatedTopicIdentity: Map[String, TopicIdentity]): Try[Unit] = {
-    getValidAssignments(currentTopicIdentity, generatedTopicIdentity).flatMap {
+  def executeAssignment(curator: CuratorFramework
+                        , currentTopicIdentity: Map[String, TopicIdentity]
+                        , generatedTopicIdentity: Map[String, TopicIdentity]
+                        , forceSet: Set[ForceReassignmentCommand]): Try[Unit] = {
+    getValidAssignments(currentTopicIdentity, generatedTopicIdentity, forceSet).flatMap {
       validAssignments =>
         Try {
           checkCondition(validAssignments.nonEmpty, NoValidAssignments)
@@ -155,7 +159,7 @@ object ReassignPartitionErrors {
     "Current partitions and generated partition replicas are out of sync current=%s, generated=%s , please regenerate"
     .format(current, generated))
   class ReplicationOutOfSync private[ReassignPartitionErrors](current: Int, generated: Int) extends UtilError(
-    "Current replication factor and generated replication factor for replicas are out of sync current=%s, generated=%s , please regenerate"
+    "Current replication factor and generated replication factor for replicas are out of sync current=%s, generated=%s , please regenerate or attempt to force operation"
       .format(current, generated))
   class NoValidAssignments private[ReassignPartitionErrors] extends UtilError("Cannot reassign partitions with no valid assignments!")
   class ReassignmentAlreadyInProgress private[ReassignPartitionErrors] extends UtilError("Partition reassignment currently in " +

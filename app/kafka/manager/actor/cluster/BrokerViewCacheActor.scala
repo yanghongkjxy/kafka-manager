@@ -3,28 +3,34 @@
  * See accompanying LICENSE file.
  */
 
-package kafka.manager
+package kafka.manager.actor.cluster
 
-import akka.actor.{ActorRef, Cancellable, ActorPath}
-import kafka.manager.features.{KMDisplaySizeFeature, KMJMXMetricsFeature}
+import akka.actor.{ActorPath, ActorRef, Cancellable}
+import kafka.manager.base.cluster.BaseClusterActor
+import kafka.manager.base.{LongRunningPoolActor, LongRunningPoolConfig}
+import kafka.manager.features.{KMPollConsumersFeature, KMDisplaySizeFeature, KMJMXMetricsFeature}
+import kafka.manager.jmx.{SegmentsMetric, KafkaJMX, KafkaMetrics, LogInfo}
+import kafka.manager.model.ClusterContext
 import kafka.manager.utils.FiniteQueue
 import org.joda.time.DateTime
 
 import scala.collection.immutable.Queue
 import scala.collection.mutable
-import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
+import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
 /**
  * @author hiral
  */
-import ActorModel._
+import kafka.manager.model.ActorModel._
 case class BrokerViewCacheActorConfig(kafkaStateActorPath: ActorPath,
                                       clusterContext: ClusterContext,
                                       longRunningPoolConfig: LongRunningPoolConfig,
                                       updatePeriod: FiniteDuration = 10 seconds)
-class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunningPoolActor {
+class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunningPoolActor with BaseClusterActor {
+
+  protected implicit val clusterContext: ClusterContext = config.clusterContext
 
   private[this] val ZERO = BigDecimal(0)
 
@@ -36,9 +42,9 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
   
   private[this] var topicDescriptionsOption : Option[TopicDescriptions] = None
 
-  private[this] var topicConsumerMap : Map[String, Iterable[String]] = Map.empty
+  private[this] var topicConsumerMap : Map[String, Iterable[(String, ConsumerType)]] = Map.empty
 
-  private[this] var consumerIdentities : Map[String, ConsumerIdentity] = Map.empty
+  private[this] var consumerIdentities : Map[(String, ConsumerType), ConsumerIdentity] = Map.empty
 
   private[this] var consumerDescriptionsOption : Option[ConsumerDescriptions] = None
 
@@ -125,11 +131,13 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
     request match {
       case BVForceUpdate =>
         log.info("Updating broker view...")
-        //ask for topic descriptions
+        // ask for topic descriptions
         val lastUpdateMillisOption: Option[Long] = topicDescriptionsOption.map(_.lastUpdateMillis)
+        // upon receiving topic descriptions, it will ask for broker list
         context.actorSelection(config.kafkaStateActorPath).tell(KSGetAllTopicDescriptions(lastUpdateMillisOption), self)
-        context.actorSelection(config.kafkaStateActorPath).tell(KSGetAllConsumerDescriptions(lastUpdateMillisOption), self)
-        context.actorSelection(config.kafkaStateActorPath).tell(KSGetBrokers, self)
+        featureGate(KMPollConsumersFeature) {
+          context.actorSelection(config.kafkaStateActorPath).tell(KSGetAllConsumerDescriptions(lastUpdateMillisOption), self)
+        }
 
       case BVGetViews =>
         sender ! allBrokerViews()
@@ -182,6 +190,7 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
         })
 
       case BVUpdateBrokerTopicPartitionSizes(id, logInfo) =>
+        // put topic sizes
         for ((topic, partitions) <- logInfo) {
           val tMap = brokerTopicPartitionSizes.getOrElse(topic, new mutable.HashMap[Int, mutable.Map[Int, Long]])
           for ((partition, info) <- partitions; pMap = tMap.getOrElse(partition, new mutable.HashMap[Int, Long])) {
@@ -189,6 +198,23 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
             tMap.put(partition, pMap)
           }
           brokerTopicPartitionSizes.put(topic, tMap)
+        }
+
+        // update broker metrics and view to reflect topics sizes it has
+        val metrics = brokerMetrics.get(id)
+        metrics foreach { case bm =>
+          val brokerSize = logInfo.map{case (t, p) => p.values.map(_.bytes).sum}.sum
+          val newBm = BrokerMetrics(
+            bm.bytesInPerSec,
+            bm.bytesOutPerSec,
+            bm.bytesRejectedPerSec,
+            bm.failedFetchRequestsPerSec,
+            bm.failedProduceRequestsPerSec,
+            bm.messagesInPerSec,
+            bm.oSystemMetrics,
+            SegmentsMetric(brokerSize)
+          )
+          brokerMetrics += (id -> newBm)
         }
 
       case any: Any => log.warning("bvca : processActorRequest : Received unknown message: {}", any)
@@ -200,26 +226,21 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
       case td: TopicDescriptions =>
         previousTopicDescriptionsOption = topicDescriptionsOption
         topicDescriptionsOption = Some(td)
-        updateView()
+        context.actorSelection(config.kafkaStateActorPath).tell(KSGetBrokers, self)
 
       case cd: ConsumerDescriptions =>
         consumerDescriptionsOption = Some(cd)
-        updateView()
+        updateViewsForConsumers()
 
       case bl: BrokerList =>
         brokerListOption = Some(bl)
-        updateView()
+        updateViewForBrokersAndTopics()
 
       case any: Any => log.warning("bvca : processActorResponse : Received unknown message: {}", any)
     }
   }
 
   implicit def queue2finitequeue[A](q: Queue[A]): FiniteQueue[A] = new FiniteQueue[A](q)
-
-  private[this] def updateView(): Unit = {
-    updateViewForBrokersAndTopics()
-    updateViewsForConsumers()
-  }
 
   private[this] def updateViewForBrokersAndTopics(): Unit = {
     for {
@@ -235,27 +256,39 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
       }
       topicIdentities = topicIdentity.map(ti => (ti.topic, ti)).toMap
       val topicPartitionByBroker = topicIdentity.flatMap(
-        ti => ti.partitionsByBroker.map(btp => (ti,btp.id,btp.partitions))).groupBy(_._2)
+        ti => ti.partitionsByBroker.map(btp => (ti,btp.id,btp.partitions,btp.leaders))).groupBy(_._2)
 
-      //check for 3*broker list size since we schedule 3 jmx calls for each broker
-      if (config.clusterContext.clusterFeatures.features(KMJMXMetricsFeature) && config.clusterContext.clusterFeatures.features(KMDisplaySizeFeature) && hasCapacityFor(3*brokerListOption.size)) {
+      featureGate(KMJMXMetricsFeature) {
         implicit val ec = longRunningExecutionContext
-        updateTopicMetrics(brokerList, topicPartitionByBroker, shouldGetBrokerSize = true)
-        updateBrokerMetrics(brokerList, shouldGetBrokerSize = true)
-        updateBrokerTopicPartitionsSize(brokerList)
-      } else if (config.clusterContext.clusterFeatures.features(KMJMXMetricsFeature) && hasCapacityFor(2*brokerListOption.size)) {
-        implicit val ec = longRunningExecutionContext
-        updateTopicMetrics(brokerList, topicPartitionByBroker)
-        updateBrokerMetrics(brokerList)
-      } else if(config.clusterContext.clusterFeatures.features(KMJMXMetricsFeature)) {
-        log.warning("Not scheduling update of JMX for all brokers, not enough capacity!")
+        featureGateFold[Unit](KMDisplaySizeFeature)(
+        {
+          //check for 2*broker list size since we schedule 2 jmx calls for each broker
+          if (hasCapacityFor(2*brokerList.list.size)) {
+            updateTopicMetrics(brokerList, topicPartitionByBroker)
+            updateBrokerMetrics(brokerList)
+          } else {
+            log.warning("Not scheduling update of JMX for all brokers, not enough capacity!")
+          }
+        }
+        ,
+        {
+          //check for 3*broker list size since we schedule 3 jmx calls for each broker
+          if (hasCapacityFor(3*brokerList.list.size)) {
+            updateTopicMetrics(brokerList, topicPartitionByBroker)
+            updateBrokerMetrics(brokerList)
+            updateBrokerTopicPartitionsSize(brokerList)
+          } else {
+            log.warning("Not scheduling update of JMX for all brokers, not enough capacity!")
+          }
+        })
+
       }
 
       topicPartitionByBroker.foreach {
         case (brokerId, topicPartitions) =>
-          val topicPartitionsMap: Map[TopicIdentity, IndexedSeq[Int]] = topicPartitions.map {
-            case (topic, id, partitions) =>
-              (topic, partitions)
+          val topicPartitionsMap: Map[TopicIdentity, BrokerTopicInfo] = topicPartitions.map {
+            case (topic, id, partitions, leaders) =>
+              (topic, BrokerTopicInfo(partitions, leaders))
           }.toMap
           brokerTopicPartitions.put(
             brokerId, BVView(topicPartitionsMap, config.clusterContext, brokerMetrics.get(brokerId)))
@@ -269,17 +302,16 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
     } {
       val consumerIdentity : IndexedSeq[ConsumerIdentity] = consumerDescriptions.descriptions.map(
           ConsumerIdentity.from(_, config.clusterContext))
-      consumerIdentities = consumerIdentity.map(ci => (ci.consumerGroup, ci)).toMap
+      consumerIdentities = consumerIdentity.map(ci => ((ci.consumerGroup, ci.consumerType), ci)).toMap
 
       val c2tMap = consumerDescriptions.descriptions.map{cd: ConsumerDescription =>
-        (cd.consumer, cd.topics.keys.toList)}.toMap
+        ((cd.consumer, cd.consumerType), cd.topics.keys.toList)}.toMap
       topicConsumerMap = c2tMap.values.flatten.map(v => (v, c2tMap.keys.filter(c2tMap(_).contains(v)))).toMap
     }
   }
 
   private def updateTopicMetrics(brokerList: BrokerList,
-    topicPartitionByBroker: Map[Int, IndexedSeq[(TopicIdentity, Int, IndexedSeq[Int])]],
-    shouldGetBrokerSize: Boolean = false
+    topicPartitionByBroker: Map[Int, IndexedSeq[(TopicIdentity, Int, IndexedSeq[Int], IndexedSeq[Int])]]
     )(implicit ec: ExecutionContext): Unit = {
     val brokerLookup = brokerList.list.map(bi => bi.id -> bi).toMap
     topicPartitionByBroker.foreach {
@@ -289,19 +321,21 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
           broker =>
             longRunning {
               Future {
-                val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort) {
+                val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort,
+                  config.clusterContext.config.jmxUser, config.clusterContext.config.jmxPass, config.clusterContext.config.jmxSsl
+                ) {
                   mbsc =>
                     topicPartitions.map {
-                      case (topic, id, partitions) =>
+                      case (topic, id, partitions, leaders) =>
                         (topic.topic,
-                          KafkaMetrics.getBrokerMetrics(config.clusterContext.config.version, mbsc, shouldGetBrokerSize, Option(topic.topic)))
+                          KafkaMetrics.getBrokerMetrics(config.clusterContext.config.version, mbsc, None, Option(topic.topic)))
                     }
                 }
                 val result = tryResult match {
                   case scala.util.Failure(t) =>
                     log.error(t, s"Failed to get topic metrics for broker $broker")
                     topicPartitions.map {
-                      case (topic, id, partitions) =>
+                      case (topic, id, partitions, leaders) =>
                         (topic.topic, BrokerMetrics.DEFAULT)
                     }
                   case scala.util.Success(bm) => bm
@@ -313,14 +347,17 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
     }
   }
 
-  private def updateBrokerMetrics(brokerList: BrokerList, shouldGetBrokerSize: Boolean = false)(implicit ec: ExecutionContext): Unit = {
+  // this only updates broker metrics except for broker size
+  private def updateBrokerMetrics(brokerList: BrokerList)(implicit ec: ExecutionContext): Unit = {
     brokerList.list.foreach {
       broker =>
         longRunning {
           Future {
-            val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort) {
+            val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort,
+              config.clusterContext.config.jmxUser, config.clusterContext.config.jmxPass, config.clusterContext.config.jmxSsl
+            ) {
               mbsc =>
-                KafkaMetrics.getBrokerMetrics(config.clusterContext.config.version, mbsc, shouldGetBrokerSize)
+                KafkaMetrics.getBrokerMetrics(config.clusterContext.config.version, mbsc, brokerMetrics.get(broker.id).map(_.size))
             }
 
             val result = tryResult match {
@@ -340,7 +377,9 @@ class BrokerViewCacheActor(config: BrokerViewCacheActorConfig) extends LongRunni
       broker =>
         longRunning {
           Future {
-            val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort) {
+            val tryResult = KafkaJMX.doWithConnection(broker.host, broker.jmxPort,
+              config.clusterContext.config.jmxUser, config.clusterContext.config.jmxPass, config.clusterContext.config.jmxSsl
+            ) {
               mbsc =>
                 KafkaMetrics.getLogSegmentsInfo(mbsc)
             }

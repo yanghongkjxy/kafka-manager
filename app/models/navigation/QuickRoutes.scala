@@ -13,10 +13,10 @@ import play.api.mvc.Call
 object QuickRoutes {
   import models.navigation.BreadCrumbs._
 
-  val baseRoutes : Map[String, Call] = Map(
-    "Clusters" -> controllers.routes.Application.index(),
-    "List" -> controllers.routes.Application.index(),
-    "Add Cluster" -> controllers.routes.Cluster.addCluster()
+  val baseRoutes : Map[String, () => Call] = Map(
+    "Clusters" -> controllers.routes.Application.index,
+    "List" -> controllers.routes.Application.index,
+    "Add Cluster" -> controllers.routes.Cluster.addCluster
   )
   val clusterRoutes : Map[String, String => Call] = Map(
     "Update Cluster" -> controllers.routes.Cluster.updateCluster,
@@ -33,11 +33,11 @@ object QuickRoutes {
     "Create Logkafka" -> controllers.routes.Logkafka.createLogkafka
   )
   val topicRoutes : Map[String, (String, String) => Call] = Map(
-    "Topic View" -> controllers.routes.Topic.topic,
+    "Topic View" -> ((c, t) => controllers.routes.Topic.topic(c, t, force=false)),
     "Add Partitions" -> controllers.routes.Topic.addPartitions,
     "Update Config" -> controllers.routes.Topic.addPartitions
   )
-  val consumerRoutes : Map[String, (String, String) => Call] = Map(
+  val consumerRoutes : Map[String, (String, String, String) => Call] = Map(
     "Consumer View" -> controllers.routes.Consumer.consumer
   )
   val logkafkaRoutes : Map[String, (String, String, String) => Call] = Map(
@@ -47,16 +47,16 @@ object QuickRoutes {
 
   implicit class BaseRoute(s: String) {
     def baseRouteMenuItem : (String, Call) = {
-      s -> baseRoutes(s)
+      s -> baseRoutes(s)()
     }
     def baseRoute : Call = {
-      baseRoutes(s)
+      baseRoutes(s)()
     }
     def baseMenu(c: String): Menu = {
       Menu(s,IndexedSeq.empty,Some(baseRoute))
     }
     def baseRouteBreadCrumb : BCStaticLink = {
-      BCStaticLink(s, baseRoutes(s))
+      BCStaticLink(s, baseRoutes(s)())
     }
   }
 
@@ -79,17 +79,17 @@ object QuickRoutes {
     def topicRouteMenuItem(c: String, t: String): (String, Call) = {
       s -> topicRoutes(s)(c,t)
     }
-    def topicRoute(c: String, t: String): Call = {
-      topicRoutes(s)(c,t)
+    def topicRoute(c: String, t: List[String]): Call = {
+      topicRoutes(s)(c,t.head)
     }
   }
 
   implicit class ConsumerRoute(s: String) {
-    def consumerRouteMenuItem(cluster: String, consumer: String): (String, Call) = {
-      s -> consumerRoutes(s)(cluster,consumer)
+    def consumerRouteMenuItem(cluster: String, consumer: String, consumerType: String): (String, Call) = {
+      s -> consumerRoutes(s)(cluster,consumer,consumerType)
     }
-    def consumerRoute(cluster: String, consumer: String): Call = {
-      consumerRoutes(s)(cluster,consumer)
+    def consumerRoute(cluster: String, consumer: List[String], consumerType: String): Call = {
+      consumerRoutes(s)(cluster,consumer.head, consumerType)
     }
   }
 
@@ -97,9 +97,10 @@ object QuickRoutes {
     def logkafkaRouteMenuItem(c: String, h: String, l:String): (String, Call) = {
       s -> logkafkaRoutes(s)(c,h,l)
     }
-    def logkafkaRoute(c: String, hl: String): Call = {
-      val hlArray = hl.split("\\?")
-      logkafkaRoutes(s)(c,hlArray(0),hlArray(1))
+    def logkafkaRoute(c: String, hl: List[String]): Call = {
+      val logkafka_id = hl(0)
+      val log_path = hl(1)
+      logkafkaRoutes(s)(c,logkafka_id,log_path)
     }
   }
 }

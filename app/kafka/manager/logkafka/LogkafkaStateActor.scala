@@ -3,20 +3,23 @@
  * See accompanying LICENSE file.
  */
 
-package kafka.manager
+package kafka.manager.logkafka
 
+import kafka.manager.model.{ClusterContext, ActorModel}
+import ActorModel._
+import kafka.manager._
+import kafka.manager.base.BaseQueryCommandActor
 import kafka.manager.features.KMLogKafkaFeature
-import org.apache.curator.framework.recipes.cache._
+import kafka.manager.utils.LogkafkaZkUtils
 import org.apache.curator.framework.CuratorFramework
-import org.joda.time.{DateTimeZone, DateTime}
-import kafka.manager.utils.{LogkafkaZkUtils}
+import org.apache.curator.framework.recipes.cache._
+import org.joda.time.{DateTime, DateTimeZone}
 
-import scala.util.{Success, Failure, Try}
+import scala.util.{Failure, Success, Try}
 
 /**
  * @author hiral
  */
-import ActorModel._
 import scala.collection.JavaConverters._
 class LogkafkaStateActor(curator: CuratorFramework, 
                       clusterContext: ClusterContext) extends BaseQueryCommandActor {
@@ -96,16 +99,16 @@ class LogkafkaStateActor(curator: CuratorFramework,
     super.postStop()
   }
 
-  def getLogkafkaConfig(hostname: String) : Option[LogkafkaConfig] = {
+  def getLogkafkaConfig(logkafka_id: String) : Option[LogkafkaConfig] = {
       for {
-        config <- getLogkafkaConfigString(hostname)
-      } yield LogkafkaConfig(hostname, Some(config))
+        config <- getLogkafkaConfigString(logkafka_id)
+      } yield LogkafkaConfig(logkafka_id, Some(config))
   }
 
-  def getLogkafkaClient(hostname: String) : Option[LogkafkaClient] = {
+  def getLogkafkaClient(logkafka_id: String) : Option[LogkafkaClient] = {
       for {
-        client <- getLogkafkaClientString(hostname)
-      } yield LogkafkaClient(hostname, Some(client))
+        client <- getLogkafkaClientString(logkafka_id)
+      } yield LogkafkaClient(logkafka_id, Some(client))
   }
 
   override def processActorResponse(response: ActorResponse): Unit = {
@@ -114,39 +117,39 @@ class LogkafkaStateActor(curator: CuratorFramework,
     }
   }
   
-  private[this] def getLogkafkaConfigString(hostname: String) : Option[String] = {
-    val hostnamePath = "%s/%s".format(LogkafkaZkUtils.LogkafkaConfigPath,hostname)
-    Option(logkafkaConfigTreeCache.getCurrentData(hostnamePath)).map( childData => asString(childData.getData))
+  private[this] def getLogkafkaConfigString(logkafka_id: String) : Option[String] = {
+    val logkafka_idPath = "%s/%s".format(LogkafkaZkUtils.LogkafkaConfigPath,logkafka_id)
+    Option(logkafkaConfigTreeCache.getCurrentData(logkafka_idPath)).map( childData => asString(childData.getData))
   }
 
-  private[this] def getLogkafkaClientString(hostname: String) : Option[String] = {
-    val hostnamePath = "%s/%s".format(LogkafkaZkUtils.LogkafkaClientPath,hostname)
-    Option(logkafkaClientTreeCache.getCurrentData(hostnamePath)).map( childData => asString(childData.getData))
+  private[this] def getLogkafkaClientString(logkafka_id: String) : Option[String] = {
+    val logkafka_idPath = "%s/%s".format(LogkafkaZkUtils.LogkafkaClientPath,logkafka_id)
+    Option(logkafkaClientTreeCache.getCurrentData(logkafka_idPath)).map( childData => asString(childData.getData))
   }
 
   override def processQueryRequest(request: QueryRequest): Unit = {
     request match {
-      case LKSGetLogkafkaHostnames =>
+      case LKSGetLogkafkaLogkafkaIds =>
         val deleteSet: Set[String] = Set.empty
         withLogkafkaConfigTreeCache { cache =>
           cache.getCurrentChildren(LogkafkaZkUtils.LogkafkaConfigPath)
         }.fold {
-          sender ! LogkafkaHostnameList(IndexedSeq.empty, deleteSet)
+          sender ! LogkafkaLogkafkaIdList(IndexedSeq.empty, deleteSet)
         } { data: java.util.Map[String, ChildData] =>
-          sender ! LogkafkaHostnameList(data.asScala.map(kv => kv._1).toIndexedSeq, deleteSet)
+          sender ! LogkafkaLogkafkaIdList(data.asScala.map(kv => kv._1).toIndexedSeq, deleteSet)
         }
 
-      case LKSGetLogkafkaConfig(hostname) =>
-        sender ! getLogkafkaConfig(hostname)
+      case LKSGetLogkafkaConfig(logkafka_id) =>
+        sender ! getLogkafkaConfig(logkafka_id)
 
-      case LKSGetLogkafkaClient(hostname) =>
-        sender ! getLogkafkaClient(hostname)
+      case LKSGetLogkafkaClient(logkafka_id) =>
+        sender ! getLogkafkaClient(logkafka_id)
 
-      case LKSGetLogkafkaConfigs(hostnames) =>
-        sender ! LogkafkaConfigs(hostnames.toIndexedSeq.map(getLogkafkaConfig).flatten, logkafkaConfigTreeCacheLastUpdateMillis)
+      case LKSGetLogkafkaConfigs(logkafka_ids) =>
+        sender ! LogkafkaConfigs(logkafka_ids.toIndexedSeq.map(getLogkafkaConfig).flatten, logkafkaConfigTreeCacheLastUpdateMillis)
 
-      case LKSGetLogkafkaClients(hostnames) =>
-        sender ! LogkafkaClients(hostnames.toIndexedSeq.map(getLogkafkaClient).flatten, logkafkaClientTreeCacheLastUpdateMillis)
+      case LKSGetLogkafkaClients(logkafka_ids) =>
+        sender ! LogkafkaClients(logkafka_ids.toIndexedSeq.map(getLogkafkaClient).flatten, logkafkaClientTreeCacheLastUpdateMillis)
 
       case LKSGetAllLogkafkaConfigs(lastUpdateMillisOption) =>
         val lastUpdateMillis = lastUpdateMillisOption.getOrElse(0L)
